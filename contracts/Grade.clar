@@ -5,6 +5,7 @@
 (define-constant ERR-ALREADY-EXISTS (err u104))
 (define-constant ERR-INVALID-COURSE (err u105))
 (define-constant ERR-INSUFFICIENT-PERMISSION (err u106))
+(define-constant ERR-NO-GRADES-FOUND (err u107))
 
 (define-data-var contract-owner principal tx-sender)
 (define-data-var next-student-id uint u1)
@@ -60,6 +61,17 @@
   { grade-id: uint }
 )
 
+(define-map student-gpa-data
+  { student-id: uint }
+  {
+    total-grade-points: uint,
+    total-credits: uint,
+    gpa: uint,
+    academic-standing: (string-ascii 20),
+    last-updated: uint
+  }
+)
+
 (define-map instructors
   { instructor: principal }
   {
@@ -106,6 +118,38 @@
         (if (>= numeric-grade u60)
           "D"
           "F"
+        )
+      )
+    )
+  )
+)
+
+(define-private (grade-to-points (numeric-grade uint))
+  (if (>= numeric-grade u90)
+    u400
+    (if (>= numeric-grade u80)
+      u300
+      (if (>= numeric-grade u70)
+        u200
+        (if (>= numeric-grade u60)
+          u100
+          u0
+        )
+      )
+    )
+  )
+)
+
+(define-private (calculate-academic-standing (gpa uint))
+  (if (>= gpa u350)
+    "Honor Roll"
+    (if (>= gpa u300)
+      "Dean's List"
+      (if (>= gpa u200)
+        "Good Standing"
+        (if (>= gpa u150)
+          "Warning"
+          "Probation"
         )
       )
     )
@@ -296,4 +340,83 @@
     total-grades: (- (var-get next-grade-id) u1),
     current-block: stacks-block-height
   }
+)
+
+(define-public (calculate-student-gpa (student-id uint))
+  (let
+    (
+      (student (unwrap! (map-get? students { student-id: student-id }) ERR-STUDENT-NOT-FOUND))
+    )
+    (let
+      (
+        (gpa-result (fold calculate-gpa-for-course (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10 u11 u12 u13 u14 u15 u16 u17 u18 u19 u20) { student-id: student-id, total-points: u0, total-credits: u0 }))
+        (total-points (get total-points gpa-result))
+        (total-credits (get total-credits gpa-result))
+      )
+      (if (is-eq total-credits u0)
+        ERR-NO-GRADES-FOUND
+        (let
+          (
+            (gpa (/ total-points total-credits))
+            (standing (calculate-academic-standing gpa))
+          )
+          (begin
+            (map-set student-gpa-data
+              { student-id: student-id }
+              {
+                total-grade-points: total-points,
+                total-credits: total-credits,
+                gpa: gpa,
+                academic-standing: standing,
+                last-updated: stacks-block-height
+              }
+            )
+            (ok { gpa: gpa, academic-standing: standing, total-credits: total-credits })
+          )
+        )
+      )
+    )
+  )
+)
+
+(define-private (calculate-gpa-for-course (course-id uint) (acc { student-id: uint, total-points: uint, total-credits: uint }))
+  (let
+    (
+      (student-id (get student-id acc))
+      (grade-entry (map-get? student-grades { student-id: student-id, course-id: course-id }))
+    )
+    (match grade-entry
+      entry
+        (let
+          (
+            (grade-id (get grade-id entry))
+            (grade-data (unwrap-panic (map-get? grades { grade-id: grade-id })))
+            (course-data (unwrap-panic (map-get? courses { course-id: course-id })))
+            (credits (get credits course-data))
+            (grade-value (get grade-value grade-data))
+            (grade-points (grade-to-points grade-value))
+          )
+          {
+            student-id: student-id,
+            total-points: (+ (get total-points acc) (* grade-points credits)),
+            total-credits: (+ (get total-credits acc) credits)
+          }
+        )
+      acc
+    )
+  )
+)
+
+(define-read-only (get-student-gpa (student-id uint))
+  (map-get? student-gpa-data { student-id: student-id })
+)
+
+(define-read-only (get-student-gpa-by-address (student-address principal))
+  (match (map-get? student-lookup { student-address: student-address })
+    student-data
+      (let ((student-id (get student-id student-data)))
+        (map-get? student-gpa-data { student-id: student-id })
+      )
+    none
+  )
 )
